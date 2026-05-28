@@ -38,4 +38,8 @@ The Imports tab fetches job rows from:
 https://raw.githubusercontent.com/speedyapply/2026-SWE-College-Jobs/main/NEW_GRAD_USA.md
 ```
 
+```
+https://raw.githubusercontent.com/SimplifyJobs/New-Grad-Positions/dev/README.md
+```
+
 Imported jobs land in a review queue. Use **Save** to create an `Interested` application in the tracker or **Ignore** to hide irrelevant postings. Auto-sync is enabled by default and can be configured in Settings.
