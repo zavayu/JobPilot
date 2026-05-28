@@ -1,0 +1,47 @@
+{
+  "name": "jobpilot",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Local-first Electron job search CRM",
+  "main": "dist/main/main.js",
+  "scripts": {
+    "dev": "concurrently \"vite --host 127.0.0.1\" \"wait-on tcp:5173 && cross-env VITE_DEV_SERVER_URL=http://127.0.0.1:5173 electron .\"",
+    "build": "npm run typecheck && vite build && tsc -p tsconfig.main.json",
+    "start": "electron .",
+    "typecheck": "tsc --noEmit && tsc -p tsconfig.main.json --noEmit",
+    "prisma:generate": "prisma generate",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@prisma/client": "^6.8.2",
+    "clsx": "^2.1.1",
+    "lucide-react": "^0.511.0",
+    "mammoth": "^1.9.0",
+    "openai": "^4.103.0",
+    "pdf-parse": "^1.1.1",
+    "react": "^19.1.0",
+    "react-dom": "^19.1.0",
+    "zod": "^3.25.28"
+  },
+  "devDependencies": {
+    "@testing-library/react": "^16.3.0",
+    "@types/node": "^22.15.21",
+    "@types/pdf-parse": "^1.1.5",
+    "@types/react": "^19.1.5",
+    "@types/react-dom": "^19.1.5",
+    "@vitejs/plugin-react": "^4.5.0",
+    "autoprefixer": "^10.4.21",
+    "concurrently": "^9.1.2",
+    "cross-env": "^7.0.3",
+    "electron": "^35.2.1",
+    "jsdom": "^26.1.0",
+    "postcss": "^8.5.3",
+    "prisma": "^6.8.2",
+    "tailwindcss": "^3.4.17",
+    "typescript": "^5.8.3",
+    "vite": "^6.3.5",
+    "vitest": "^3.1.4",
+    "wait-on": "^8.0.3"
+  }
+}

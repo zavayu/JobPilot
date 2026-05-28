@@ -1,0 +1,183 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+model Profile {
+  id                 String   @id @default(cuid())
+  name               String   @default("")
+  email              String?
+  targetRoles        String   @default("[]")
+  preferredLocations String   @default("[]")
+  remotePreference   String?
+  workAuthorization  String?
+  skills             String   @default("[]")
+  industries         String   @default("[]")
+  summary            String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+}
+
+model JobPosting {
+  id                      String          @id @default(cuid())
+  company                 String
+  title                   String
+  location                String?
+  remoteType              String?
+  description             String
+  requirements            String          @default("[]")
+  preferredQualifications String          @default("[]")
+  technologies            String          @default("[]")
+  source                  String          @default("manual")
+  sourceUrl               String?
+  sourceRepo              String?
+  sourceCommit            String?
+  datePosted              DateTime?
+  dateFound               DateTime        @default(now())
+  employmentType          String?
+  createdAt               DateTime        @default(now())
+  updatedAt               DateTime        @updatedAt
+  applications            Application[]
+  matchAnalyses           MatchAnalysis[]
+  resumeDrafts            ResumeDraft[]
+  importedJobs            ImportedJob[]
+}
+
+model Application {
+  id            String          @id @default(cuid())
+  jobPostingId  String
+  status        String          @default("Interested")
+  resumeId      String?
+  dateApplied   DateTime?
+  notes         String?
+  matchScore    Int?
+  priority      String?
+  createdAt     DateTime        @default(now())
+  updatedAt     DateTime        @updatedAt
+  jobPosting    JobPosting      @relation(fields: [jobPostingId], references: [id], onDelete: Cascade)
+  resume        Resume?         @relation(fields: [resumeId], references: [id], onDelete: SetNull)
+  statusHistory StatusHistory[]
+}
+
+model StatusHistory {
+  id            String      @id @default(cuid())
+  applicationId String
+  fromStatus    String?
+  toStatus      String
+  note          String?
+  changedAt     DateTime    @default(now())
+  application   Application @relation(fields: [applicationId], references: [id], onDelete: Cascade)
+}
+
+model Resume {
+  id               String          @id @default(cuid())
+  title            String
+  targetRole       String?
+  tags             String          @default("[]")
+  filePath         String
+  originalFileName String
+  fileType         String
+  extractedText    String?
+  version          Int             @default(1)
+  notes            String?
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+  lastUsedAt       DateTime?
+  applications     Application[]
+  matchAnalyses    MatchAnalysis[]
+  resumeDrafts     ResumeDraft[]
+}
+
+model Experience {
+  id            String   @id @default(cuid())
+  title         String
+  organization  String?
+  startDate     DateTime?
+  endDate       DateTime?
+  description   String?
+  technologies  String   @default("[]")
+  bullets       String   @default("[]")
+  impactMetrics String   @default("[]")
+  tags          String   @default("[]")
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+}
+
+model MatchAnalysis {
+  id                    String     @id @default(cuid())
+  jobPostingId          String
+  resumeId              String?
+  score                 Int
+  strengths             String     @default("[]")
+  weaknesses            String     @default("[]")
+  missingSkills         String     @default("[]")
+  relevantExperienceIds String     @default("[]")
+  recommendedResumeId   String?
+  suggestedChanges      String     @default("[]")
+  applicationPriority   String?
+  interviewPrepTopics   String     @default("[]")
+  createdAt             DateTime   @default(now())
+  jobPosting            JobPosting @relation(fields: [jobPostingId], references: [id], onDelete: Cascade)
+  resume                Resume?    @relation(fields: [resumeId], references: [id], onDelete: SetNull)
+}
+
+model ResumeDraft {
+  id            String     @id @default(cuid())
+  baseResumeId  String
+  jobPostingId  String
+  title         String
+  content       String
+  format        String     @default("markdown")
+  filePath      String?
+  changeSummary String     @default("[]")
+  createdAt     DateTime   @default(now())
+  updatedAt     DateTime   @updatedAt
+  baseResume    Resume     @relation(fields: [baseResumeId], references: [id], onDelete: Cascade)
+  jobPosting    JobPosting @relation(fields: [jobPostingId], references: [id], onDelete: Cascade)
+}
+
+model Setting {
+  key       String   @id
+  value     String
+  updatedAt DateTime @updatedAt
+}
+
+model ImportedJob {
+  id              String      @id @default(cuid())
+  sourceKey       String      @unique
+  company         String
+  companyUrl      String?
+  title           String
+  location        String?
+  salary          String?
+  postingUrl      String
+  age             String?
+  category        String
+  status          String      @default("new")
+  sourceName      String      @default("speedyapply_new_grad_usa")
+  sourceUrl       String
+  sourceRepo      String?
+  sourceCommit    String?
+  rawMarkdown     String
+  importedAt      DateTime    @default(now())
+  lastSeenAt      DateTime    @default(now())
+  savedJobId      String?
+  savedJob        JobPosting? @relation(fields: [savedJobId], references: [id], onDelete: SetNull)
+}
+
+model ImportedJobBatch {
+  id            String   @id @default(cuid())
+  sourceName    String   @default("speedyapply_new_grad_usa")
+  sourceUrl     String
+  sourceCommit  String?
+  fetchedAt     DateTime @default(now())
+  totalFound    Int
+  newJobs       Int
+  updatedJobs   Int
+  duplicateJobs Int
+  errors        String   @default("[]")
+}
