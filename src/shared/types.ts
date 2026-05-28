@@ -141,9 +141,18 @@ export type SettingsDTO = {
   theme: "light" | "dark";
   dataDirectory: string;
   jobImportUrl: string;
+  jobImportSources: JobImportSourceDTO[];
   jobAutoSyncEnabled: boolean;
   jobAutoSyncIntervalHours: number;
   lastJobImportAt?: string | null;
+};
+
+export type JobImportSourceDTO = {
+  id: string;
+  name: string;
+  provider: string;
+  url: string;
+  enabled: boolean;
 };
 
 export type ImportedJobStatus = "new" | "saved" | "ignored";
@@ -184,7 +193,7 @@ export type ImportedJobBatchDTO = {
 };
 
 export type JobImportSyncResult = {
-  batch: ImportedJobBatchDTO;
+  batches: ImportedJobBatchDTO[];
   recentJobs: ImportedJobDTO[];
 };
 
@@ -268,8 +277,8 @@ export type JobPilotApi = {
     exportMarkdown: (draftId: string) => Promise<string>;
   };
   imports: {
-    sync: () => Promise<JobImportSyncResult>;
-    list: (status?: ImportedJobStatus | "all") => Promise<ImportedJobDTO[]>;
+    sync: (sourceId?: string | null) => Promise<JobImportSyncResult>;
+    list: (status?: ImportedJobStatus | "all", sourceId?: string | "all") => Promise<ImportedJobDTO[]>;
     save: (importedJobId: string) => Promise<ApplicationDTO>;
     ignore: (importedJobId: string) => Promise<ImportedJobDTO>;
   };
@@ -283,6 +292,7 @@ export type JobPilotApi = {
           | "openAiModel"
           | "theme"
           | "jobImportUrl"
+          | "jobImportSources"
           | "jobAutoSyncEnabled"
           | "jobAutoSyncIntervalHours"
           | "lastJobImportAt"

@@ -39,8 +39,8 @@ const api: JobPilotApi = {
     exportMarkdown: (draftId) => invoke("drafts:exportMarkdown", draftId)
   },
   imports: {
-    sync: () => invoke("imports:sync"),
-    list: (status) => invoke("imports:list", status),
+    sync: (sourceId) => invoke("imports:sync", sourceId),
+    list: (status, sourceId) => invoke("imports:list", status, sourceId),
     save: (importedJobId) => invoke("imports:save", importedJobId),
     ignore: (importedJobId) => invoke("imports:ignore", importedJobId)
   },

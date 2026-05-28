@@ -1,11 +1,12 @@
 import type { PrismaClient as PrismaClientType } from "@prisma/client";
-import { DEFAULT_NEW_GRAD_JOBS_URL, importedJobDescription, parseNewGradMarkdown } from "./jobImportParser";
+import {
+  JobImportSourceConfig,
+  importedJobDescription,
+  providerForId
+} from "./jobImportParser";
 import { getPrisma } from "./database";
 import { stringifyArray, toApplicationDTO, toImportedBatchDTO, toImportedJobDTO } from "./serializers";
 import { getSettings, updateSettings } from "./services";
-
-export const SPEEDYAPPLY_SOURCE_NAME = "speedyapply_new_grad_usa";
-export const SPEEDYAPPLY_REPO = "speedyapply/2026-SWE-College-Jobs";
 
 async function fetchText(url: string): Promise<string> {
   const response = await fetch(url, {
@@ -20,99 +21,164 @@ async function fetchText(url: string): Promise<string> {
   return response.text();
 }
 
-export async function syncImportedJobs() {
+function enabledSources(sources: JobImportSourceConfig[], sourceId?: string | null): JobImportSourceConfig[] {
+  return sources.filter((source) => source.enabled && (!sourceId || source.id === sourceId));
+}
+
+export async function syncImportedJobs(sourceId?: string | null) {
   const prisma = await getPrisma();
   const settings = await getSettings();
-  const sourceUrl = settings.jobImportUrl || DEFAULT_NEW_GRAD_JOBS_URL;
-  const errors: string[] = [];
-  let totalFound = 0;
-  let newJobs = 0;
-  let updatedJobs = 0;
-  let duplicateJobs = 0;
+  const batches = [];
 
-  try {
-    const markdown = await fetchText(sourceUrl);
-    const parsedJobs = parseNewGradMarkdown(markdown);
-    totalFound = parsedJobs.length;
-    const seenInBatch = new Set<string>();
+  for (const source of enabledSources(settings.jobImportSources, sourceId)) {
+    const provider = providerForId(source.provider);
+    const errors: string[] = [];
+    let totalFound = 0;
+    let newJobs = 0;
+    let updatedJobs = 0;
+    let duplicateJobs = 0;
 
-    await prisma.$transaction(async (tx) => {
-      for (const job of parsedJobs) {
-        if (seenInBatch.has(job.sourceKey)) {
-          duplicateJobs += 1;
-          continue;
-        }
-        seenInBatch.add(job.sourceKey);
+    if (!provider) {
+      errors.push(`Unknown job source provider: ${source.provider}`);
+    } else {
+      try {
+        const markdown = await fetchText(source.url);
+        const parsedJobs = provider.parse(markdown);
+        totalFound = parsedJobs.length;
+        const seenInBatch = new Set<string>();
 
-        const existing = await tx.importedJob.findUnique({ where: { sourceKey: job.sourceKey } });
-        if (existing) {
-          updatedJobs += 1;
-          await tx.importedJob.update({
-            where: { sourceKey: job.sourceKey },
-            data: {
-              company: job.company,
-              companyUrl: job.companyUrl,
-              title: job.title,
-              location: job.location,
-              salary: job.salary,
-              postingUrl: job.postingUrl,
-              age: job.age,
-              category: job.category,
-              sourceUrl,
-              sourceRepo: SPEEDYAPPLY_REPO,
-              rawMarkdown: job.rawMarkdown,
-              lastSeenAt: new Date()
+        await prisma.$transaction(async (tx) => {
+          for (const job of parsedJobs) {
+            if (seenInBatch.has(job.sourceKey) || seenInBatch.has(job.canonicalUrl)) {
+              duplicateJobs += 1;
+              continue;
             }
-          });
-        } else {
-          newJobs += 1;
-          await tx.importedJob.create({
-            data: {
-              id: crypto.randomUUID(),
-              ...job,
-              sourceName: SPEEDYAPPLY_SOURCE_NAME,
-              sourceUrl,
-              sourceRepo: SPEEDYAPPLY_REPO
+            seenInBatch.add(job.sourceKey);
+            seenInBatch.add(job.canonicalUrl);
+
+            const existingBySource = await tx.importedJob.findUnique({ where: { sourceKey: job.sourceKey } });
+            if (existingBySource) {
+              updatedJobs += 1;
+              await tx.importedJob.update({
+                where: { sourceKey: job.sourceKey },
+                data: {
+                  company: job.company,
+                  companyUrl: job.companyUrl,
+                  title: job.title,
+                  location: job.location,
+                  salary: job.salary,
+                  postingUrl: job.canonicalUrl,
+                  age: job.age,
+                  category: job.category,
+                  sourceName: source.id,
+                  sourceUrl: source.url,
+                  sourceRepo: provider.sourceRepo,
+                  rawMarkdown: job.rawMarkdown,
+                  lastSeenAt: new Date()
+                }
+              });
+              continue;
             }
-          });
-        }
+
+            const duplicate = await tx.importedJob.findFirst({
+              where: {
+                postingUrl: job.canonicalUrl
+              },
+              orderBy: { importedAt: "asc" }
+            });
+            if (duplicate) {
+              duplicateJobs += 1;
+              await tx.importedJob.create({
+                data: {
+                  id: crypto.randomUUID(),
+                  sourceKey: job.sourceKey,
+                  company: job.company,
+                  companyUrl: job.companyUrl,
+                  title: job.title,
+                  location: job.location,
+                  salary: job.salary,
+                  postingUrl: job.canonicalUrl,
+                  age: job.age,
+                  category: job.category,
+                  rawMarkdown: job.rawMarkdown,
+                  status: "ignored",
+                  sourceName: source.id,
+                  sourceUrl: source.url,
+                  sourceRepo: provider.sourceRepo
+                }
+              });
+            } else {
+              newJobs += 1;
+              await tx.importedJob.create({
+                data: {
+                  id: crypto.randomUUID(),
+                  sourceKey: job.sourceKey,
+                  company: job.company,
+                  companyUrl: job.companyUrl,
+                  title: job.title,
+                  location: job.location,
+                  salary: job.salary,
+                  postingUrl: job.canonicalUrl,
+                  age: job.age,
+                  category: job.category,
+                  rawMarkdown: job.rawMarkdown,
+                  sourceName: source.id,
+                  sourceUrl: source.url,
+                  sourceRepo: provider.sourceRepo
+                }
+              });
+            }
+          }
+        });
+      } catch (err) {
+        errors.push(err instanceof Error ? err.message : String(err));
+      }
+    }
+
+    const batch = await prisma.importedJobBatch.create({
+      data: {
+        id: crypto.randomUUID(),
+        sourceName: source.id,
+        sourceUrl: source.url,
+        totalFound,
+        newJobs,
+        updatedJobs,
+        duplicateJobs,
+        errors: stringifyArray(errors)
       }
     });
-  } catch (err) {
-    errors.push(err instanceof Error ? err.message : String(err));
+    batches.push(toImportedBatchDTO(batch));
   }
 
-  const batch = await prisma.importedJobBatch.create({
-    data: {
-      id: crypto.randomUUID(),
-      sourceName: SPEEDYAPPLY_SOURCE_NAME,
-      sourceUrl,
-      totalFound,
-      newJobs,
-      updatedJobs,
-      duplicateJobs,
-      errors: stringifyArray(errors)
-    }
-  });
-
-  await updateSettings({ lastJobImportAt: batch.fetchedAt.toISOString() });
+  if (batches.length) {
+    await updateSettings({ lastJobImportAt: new Date().toISOString() });
+  }
 
   const recentJobs = await prisma.importedJob.findMany({
-    where: { status: "new" },
+    where: {
+      status: "new"
+    },
     orderBy: [{ lastSeenAt: "desc" }, { importedAt: "desc" }],
     take: 50
   });
 
   return {
-    batch: toImportedBatchDTO(batch),
+    batches,
     recentJobs: recentJobs.map(toImportedJobDTO)
   };
 }
 
-export async function listImportedJobs(status: "all" | "new" | "saved" | "ignored" = "new") {
+export async function listImportedJobs(status: "all" | "new" | "saved" | "ignored" = "new", sourceId: string | "all" = "all") {
   const prisma = await getPrisma();
+  const where: Record<string, unknown> = {};
+  if (status !== "all") {
+    where.status = status;
+  }
+  if (sourceId !== "all") {
+    where.sourceName = sourceId;
+  }
   const jobs = await prisma.importedJob.findMany({
-    where: status === "all" ? undefined : { status },
+    where,
     orderBy: [{ lastSeenAt: "desc" }, { importedAt: "desc" }],
     take: 500
   });
@@ -144,15 +210,43 @@ export async function saveImportedJob(importedJobId: string) {
   return toApplicationDTO(application);
 }
 
-async function saveImportedJobInTransaction(tx: Omit<PrismaClientType, "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends">, importedJobId: string) {
+async function saveImportedJobInTransaction(
+  tx: Omit<PrismaClientType, "$connect" | "$disconnect" | "$on" | "$transaction" | "$use" | "$extends">,
+  importedJobId: string
+) {
   const importedJob = await tx.importedJob.findUniqueOrThrow({ where: { id: importedJobId } });
+  const duplicate = await tx.importedJob.findFirst({
+    where: {
+      postingUrl: importedJob.postingUrl,
+      savedJobId: { not: null }
+    },
+    orderBy: { importedAt: "asc" }
+  });
+
+  if (duplicate?.savedJobId) {
+    await tx.importedJob.update({
+      where: { id: importedJobId },
+      data: {
+        status: "saved",
+        savedJobId: duplicate.savedJobId
+      }
+    });
+    return tx.application.findFirstOrThrow({
+      where: { jobPostingId: duplicate.savedJobId },
+      include: { jobPosting: true, resume: true }
+    });
+  }
+
   const job = await tx.jobPosting.create({
     data: {
       id: crypto.randomUUID(),
       company: importedJob.company,
       title: importedJob.title,
       location: importedJob.location,
-      description: importedJobDescription(importedJob),
+      description: importedJobDescription({
+        ...importedJob,
+        canonicalUrl: importedJob.postingUrl
+      }),
       source: "github_import",
       sourceUrl: importedJob.postingUrl,
       sourceRepo: importedJob.sourceRepo,
@@ -168,7 +262,7 @@ async function saveImportedJobInTransaction(tx: Omit<PrismaClientType, "$connect
       id: crypto.randomUUID(),
       jobPostingId: job.id,
       status: "Interested",
-      notes: `Imported from ${importedJob.sourceRepo ?? "GitHub"} (${importedJob.category}).`
+      notes: `Imported from ${importedJob.sourceRepo ?? importedJob.sourceName ?? "GitHub"} (${importedJob.category}).`
     },
     include: { jobPosting: true, resume: true }
   });

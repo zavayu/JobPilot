@@ -26,6 +26,8 @@ import {
   CreateJobInput,
   DashboardMetrics,
   ExperienceDTO,
+  ImportedJobBatchDTO,
+  JobImportSourceDTO,
   ImportedJobDTO,
   JobDetailDTO,
   ResumeDTO,
@@ -106,6 +108,16 @@ function ageToDays(age?: string | null): number {
   if (unit === "m") return amount / 1440;
   if (unit === "h") return amount / 24;
   return amount;
+}
+
+function importSyncBatches(result: { batches?: ImportedJobBatchDTO[]; batch?: ImportedJobBatchDTO } | null | undefined): ImportedJobBatchDTO[] {
+  if (Array.isArray(result?.batches)) {
+    return result.batches;
+  }
+  if (result?.batch) {
+    return [result.batch];
+  }
+  return [];
 }
 
 function statusTone(status: string): string {
@@ -230,6 +242,7 @@ export default function App() {
   const [statusFilter, setStatusFilter] = useState("all");
   const [applicationSort, setApplicationSort] = useState<ApplicationSortKey>("updated-desc");
   const [importFilter, setImportFilter] = useState<"all" | "new" | "saved" | "ignored">("new");
+  const [importSourceFilter, setImportSourceFilter] = useState<string>("all");
   const [jobForm, setJobForm] = useState<CreateJobInput>(initialJobForm);
   const [experienceForm, setExperienceForm] = useState<UpsertExperienceInput>(initialExperienceForm);
   const [selectedResumeForAi, setSelectedResumeForAi] = useState("");
@@ -240,7 +253,7 @@ export default function App() {
   async function refreshAll() {
     const [nextApplications, nextImportedJobs, nextResumes, nextExperiences, nextDrafts, nextMetrics, nextSettings] = await Promise.all([
       window.jobPilot.jobs.list(),
-      window.jobPilot.imports.list(importFilter),
+      window.jobPilot.imports.list(importFilter, importSourceFilter),
       window.jobPilot.resumes.list(),
       window.jobPilot.experiences.list(),
       window.jobPilot.drafts.list(),
@@ -317,10 +330,10 @@ export default function App() {
 
   useEffect(() => {
     window.jobPilot.imports
-      .list(importFilter)
+      .list(importFilter, importSourceFilter)
       .then(setImportedJobs)
       .catch((err) => setError(err instanceof Error ? err.message : String(err)));
-  }, [importFilter]);
+  }, [importFilter, importSourceFilter]);
 
   const selectedApplication = applications.find((application) => application.jobPostingId === selectedJobId) ?? null;
   const activeView = navItems.find((item) => item.id === view);
@@ -473,16 +486,23 @@ export default function App() {
               importedJobs={importedJobs}
               importFilter={importFilter}
               setImportFilter={setImportFilter}
+              importSourceFilter={importSourceFilter}
+              setImportSourceFilter={setImportSourceFilter}
               settings={settings}
               busy={busy}
               jobForm={jobForm}
               setJobForm={setJobForm}
               onCreateJob={handleCreateJob}
               onSync={() =>
-                runAction("Syncing new grad jobs", () => window.jobPilot.imports.sync(), (result) => {
+                runAction("Syncing new grad jobs", () => window.jobPilot.imports.sync(importSourceFilter === "all" ? null : importSourceFilter), (result) => {
                   setImportedJobs(result.recentJobs);
+                  const batches = importSyncBatches(result);
+                  const totalFound = batches.reduce((sum, batch) => sum + batch.totalFound, 0);
+                  const totalNew = batches.reduce((sum, batch) => sum + batch.newJobs, 0);
+                  const totalUpdated = batches.reduce((sum, batch) => sum + batch.updatedJobs, 0);
+                  const totalDuplicates = batches.reduce((sum, batch) => sum + batch.duplicateJobs, 0);
                   setNotice(
-                    `Sync complete: ${result.batch.totalFound} found, ${result.batch.newJobs} new, ${result.batch.updatedJobs} refreshed.`
+                    `Sync complete: ${totalFound} found, ${totalNew} new, ${totalUpdated} refreshed, ${totalDuplicates} duplicates.`
                   );
                 })
               }
@@ -1167,6 +1187,8 @@ function JobListingsView({
   importedJobs,
   importFilter,
   setImportFilter,
+  importSourceFilter,
+  setImportSourceFilter,
   settings,
   busy,
   jobForm,
@@ -1179,6 +1201,8 @@ function JobListingsView({
   importedJobs: ImportedJobDTO[];
   importFilter: "all" | "new" | "saved" | "ignored";
   setImportFilter: (filter: "all" | "new" | "saved" | "ignored") => void;
+  importSourceFilter: string;
+  setImportSourceFilter: (sourceId: string) => void;
   settings: SettingsDTO | null;
   busy: string | null;
   jobForm: CreateJobInput;
@@ -1191,11 +1215,12 @@ function JobListingsView({
   const [importSearch, setImportSearch] = useState("");
   const [importSort, setImportSort] = useState<ImportedJobSortKey>("seen-desc");
   const [isManualJobOpen, setIsManualJobOpen] = useState(false);
+  const sources = settings?.jobImportSources ?? [];
 
   const visibleImportedJobs = useMemo(() => {
     return importedJobs
       .filter((job) => {
-        const haystack = `${job.company} ${job.title} ${job.location} ${job.category} ${job.salary ?? ""}`.toLowerCase();
+        const haystack = `${job.company} ${job.title} ${job.location} ${job.category} ${job.salary ?? ""} ${job.sourceName}`.toLowerCase();
         return haystack.includes(importSearch.toLowerCase());
       })
       .sort((left, right) => {
@@ -1248,6 +1273,14 @@ function JobListingsView({
             <option value="ignored">Ignored</option>
             <option value="all">All</option>
           </Select>
+          <Select value={importSourceFilter} onChange={(event) => setImportSourceFilter(event.target.value)}>
+            <option value="all">All sources</option>
+            {sources.map((source) => (
+              <option key={source.id} value={source.id}>
+                {source.name}
+              </option>
+            ))}
+          </Select>
           <Select value={importSort} onChange={(event) => setImportSort(event.target.value as ImportedJobSortKey)}>
             <option value="seen-desc">Recently seen</option>
             <option value="age-asc">Newest posting age</option>
@@ -1266,11 +1299,23 @@ function JobListingsView({
         <Metric label="Visible jobs" value={String(visibleImportedJobs.length)} />
         <Metric label="New" value={String(counts.new ?? 0)} />
         <Metric label="Saved" value={String(counts.saved ?? 0)} />
-        <Metric label="Ignored" value={String(counts.ignored ?? 0)} />
+        <Metric label="Duplicates/ignored" value={String(counts.ignored ?? 0)} />
       </div>
       <div className="mb-4 rounded-md border border-border bg-slate-50 p-3 text-sm text-muted-foreground dark:bg-slate-950">
-        <p className="font-medium text-slate-700 dark:text-slate-100">Source</p>
-        <p className="mt-1 break-all">{settings?.jobImportUrl}</p>
+        <p className="font-medium text-slate-700 dark:text-slate-100">Sources</p>
+        <div className="mt-2 grid gap-2">
+          {sources.map((source) => (
+            <div key={source.id} className="flex items-center justify-between gap-3 rounded-md border border-border bg-white px-3 py-2 dark:bg-slate-900">
+              <div>
+                <p className="font-medium text-slate-700 dark:text-slate-100">{source.name}</p>
+                <p className="break-all text-xs">{source.url}</p>
+              </div>
+              <Badge className={source.enabled ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600"}>
+                {source.enabled ? "enabled" : "disabled"}
+              </Badge>
+            </div>
+          ))}
+        </div>
         <p className="mt-1">
           Auto-sync {settings?.jobAutoSyncEnabled ? `enabled every ${settings.jobAutoSyncIntervalHours}h` : "disabled"}
           {settings?.lastJobImportAt ? ` · Last sync ${formatDate(settings.lastJobImportAt)}` : ""}
@@ -1285,6 +1330,7 @@ function JobListingsView({
                 <th className="px-3 py-3">Position</th>
                 <th className="px-3 py-3">Location</th>
                 <th className="px-3 py-3">Category</th>
+                <th className="px-3 py-3">Source</th>
                 <th className="px-3 py-3">Age</th>
                 <th className="px-3 py-3">Status</th>
                 <th className="px-3 py-3">Actions</th>
@@ -1302,6 +1348,7 @@ function JobListingsView({
                   </td>
                   <td className="px-3 py-3 text-muted-foreground">{job.location || "Not set"}</td>
                   <td className="px-3 py-3">{job.category}</td>
+                  <td className="px-3 py-3 text-muted-foreground">{sources.find((source) => source.id === job.sourceName)?.name ?? job.sourceName}</td>
                   <td className="px-3 py-3 text-muted-foreground">{job.age || "-"}</td>
                   <td className="px-3 py-3">
                     <Badge className={job.status === "saved" ? "bg-emerald-100 text-emerald-800" : job.status === "ignored" ? "bg-slate-100 text-slate-600" : "bg-sky-100 text-sky-800"}>
@@ -1549,6 +1596,7 @@ function SettingsView({
     openAiModel?: string;
     theme?: "light" | "dark";
     jobImportUrl?: string;
+    jobImportSources?: JobImportSourceDTO[];
     jobAutoSyncEnabled?: boolean;
     jobAutoSyncIntervalHours?: number;
   }) => void;
@@ -1557,6 +1605,7 @@ function SettingsView({
   const [model, setModel] = useState(settings?.openAiModel ?? "gpt-4.1-mini");
   const [theme, setTheme] = useState<"light" | "dark">(settings?.theme ?? "dark");
   const [jobImportUrl, setJobImportUrl] = useState(settings?.jobImportUrl ?? "");
+  const [jobImportSources, setJobImportSources] = useState<JobImportSourceDTO[]>(settings?.jobImportSources ?? []);
   const [jobAutoSyncEnabled, setJobAutoSyncEnabled] = useState(settings?.jobAutoSyncEnabled ?? true);
   const [jobAutoSyncIntervalHours, setJobAutoSyncIntervalHours] = useState(settings?.jobAutoSyncIntervalHours ?? 6);
 
@@ -1565,6 +1614,7 @@ function SettingsView({
     setModel(settings?.openAiModel ?? "gpt-4.1-mini");
     setTheme(settings?.theme ?? "dark");
     setJobImportUrl(settings?.jobImportUrl ?? "");
+    setJobImportSources(settings?.jobImportSources ?? []);
     setJobAutoSyncEnabled(settings?.jobAutoSyncEnabled ?? true);
     setJobAutoSyncIntervalHours(settings?.jobAutoSyncIntervalHours ?? 6);
   }, [settings]);
@@ -1591,9 +1641,40 @@ function SettingsView({
             <option value="light">Light</option>
           </Select>
         </Field>
-        <Field label="New Grad Jobs Source URL">
-          <TextInput value={jobImportUrl} onChange={(event) => setJobImportUrl(event.target.value)} />
-        </Field>
+        <div className="grid gap-3">
+          <p className="text-sm font-medium text-slate-700 dark:text-slate-200">Job Sources</p>
+          {jobImportSources.map((source, index) => (
+            <div key={source.id} className="grid grid-cols-[1fr_auto] gap-3 rounded-md border border-border bg-slate-50 p-3 dark:bg-slate-950">
+              <div className="grid gap-2">
+                <p className="text-sm font-medium text-slate-700 dark:text-slate-100">{source.name}</p>
+                <TextInput
+                  value={source.url}
+                  onChange={(event) => {
+                    const nextSources = [...jobImportSources];
+                    nextSources[index] = { ...source, url: event.target.value };
+                    setJobImportSources(nextSources);
+                    if (source.id === "speedyapply_new_grad_usa") {
+                      setJobImportUrl(event.target.value);
+                    }
+                  }}
+                />
+              </div>
+              <label className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={source.enabled}
+                  onChange={(event) => {
+                    const nextSources = [...jobImportSources];
+                    nextSources[index] = { ...source, enabled: event.target.checked };
+                    setJobImportSources(nextSources);
+                  }}
+                  className="h-4 w-4 accent-teal-700"
+                />
+                Enabled
+              </label>
+            </div>
+          ))}
+        </div>
         <div className="grid grid-cols-[1fr_180px] gap-3">
           <label className="flex items-center gap-3 rounded-md border border-border bg-white px-3 py-2 text-sm font-medium text-slate-700 dark:bg-slate-950 dark:text-slate-200">
             <input
@@ -1628,6 +1709,7 @@ function SettingsView({
               openAiModel: model,
               theme,
               jobImportUrl,
+              jobImportSources,
               jobAutoSyncEnabled,
               jobAutoSyncIntervalHours
             })

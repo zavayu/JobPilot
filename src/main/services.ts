@@ -13,7 +13,7 @@ import {
 import { getPrisma } from "./database";
 import { getLocalDataPaths } from "./localData";
 import { extractResumeText } from "./resumeText";
-import { DEFAULT_NEW_GRAD_JOBS_URL } from "./jobImportParser";
+import { DEFAULT_NEW_GRAD_JOBS_URL, JobImportSourceConfig, defaultJobImportSources } from "./jobImportParser";
 import {
   parseJsonArray,
   stringifyArray,
@@ -311,13 +311,42 @@ export async function getSettings(): Promise<SettingsDTO> {
   const prisma = await getPrisma();
   const settings = await prisma.setting.findMany();
   const values = new Map(settings.map((setting) => [setting.key, setting.value]));
+  const legacyUrl = values.get("jobImportUrl") ?? DEFAULT_NEW_GRAD_JOBS_URL;
+  let jobImportSources: JobImportSourceConfig[] = defaultJobImportSources();
+  const storedSources = values.get("jobImportSources");
+  if (storedSources) {
+    try {
+      const parsed = JSON.parse(storedSources);
+      if (Array.isArray(parsed)) {
+        const defaults = new Map(jobImportSources.map((source) => [source.id, source]));
+        jobImportSources = parsed
+          .map((source) => {
+            if (!source || typeof source !== "object") return null;
+            const fallback = defaults.get(String(source.id)) ?? null;
+            return {
+              id: String(source.id ?? fallback?.id ?? ""),
+              name: String(source.name ?? fallback?.name ?? ""),
+              provider: String(source.provider ?? fallback?.provider ?? source.id ?? ""),
+              url: String(source.url ?? fallback?.url ?? ""),
+              enabled: source.enabled !== false
+            };
+          })
+          .filter((source): source is JobImportSourceConfig => Boolean(source?.id && source.url));
+      }
+    } catch {
+      jobImportSources = defaultJobImportSources();
+    }
+  } else {
+    jobImportSources = jobImportSources.map((source) => (source.id === "speedyapply_new_grad_usa" ? { ...source, url: legacyUrl } : source));
+  }
   return {
     openAiApiKeySet: Boolean(values.get("openAiApiKey")),
     openAiApiKey: values.get("openAiApiKey") ?? "",
     openAiModel: values.get("openAiModel") ?? "gpt-4.1-mini",
     theme: values.get("theme") === "light" ? "light" : "dark",
     dataDirectory: getLocalDataPaths().dataDir,
-    jobImportUrl: values.get("jobImportUrl") ?? DEFAULT_NEW_GRAD_JOBS_URL,
+    jobImportUrl: legacyUrl,
+    jobImportSources,
     jobAutoSyncEnabled: values.get("jobAutoSyncEnabled") !== "false",
     jobAutoSyncIntervalHours: Number(values.get("jobAutoSyncIntervalHours") ?? "6") || 6,
     lastJobImportAt: values.get("lastJobImportAt") ?? null
@@ -328,7 +357,14 @@ export async function updateSettings(
   input: Partial<
     Pick<
       SettingsDTO,
-      "openAiApiKey" | "openAiModel" | "theme" | "jobImportUrl" | "jobAutoSyncEnabled" | "jobAutoSyncIntervalHours" | "lastJobImportAt"
+      | "openAiApiKey"
+      | "openAiModel"
+      | "theme"
+      | "jobImportUrl"
+      | "jobImportSources"
+      | "jobAutoSyncEnabled"
+      | "jobAutoSyncIntervalHours"
+      | "lastJobImportAt"
     >
   >
 ) {
@@ -345,6 +381,9 @@ export async function updateSettings(
   }
   if (input.jobImportUrl !== undefined) {
     settingEntries.push(["jobImportUrl", input.jobImportUrl]);
+  }
+  if (input.jobImportSources !== undefined) {
+    settingEntries.push(["jobImportSources", JSON.stringify(input.jobImportSources)]);
   }
   if (input.jobAutoSyncEnabled !== undefined) {
     settingEntries.push(["jobAutoSyncEnabled", String(input.jobAutoSyncEnabled)]);

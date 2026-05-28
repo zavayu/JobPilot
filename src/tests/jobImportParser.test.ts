@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { importedJobDescription, parseNewGradMarkdown } from "../main/jobImportParser";
+import { canonicalizePostingUrl, importedJobDescription, parseNewGradMarkdown, parseSimplifyMarkdown } from "../main/jobImportParser";
 
 describe("new grad GitHub job parser", () => {
   it("parses FAANG rows with salary and Other rows without salary", () => {
@@ -42,11 +42,70 @@ describe("new grad GitHub job parser", () => {
       category: "Other",
       age: "1d",
       salary: null,
-      rawMarkdown: "| raw | row |"
+      rawMarkdown: "| raw | row |",
+      sourceRepo: "speedyapply/2026-SWE-College-Jobs"
     });
 
     expect(description).toContain("Imported from speedyapply/2026-SWE-College-Jobs");
     expect(description).toContain("Category: Other");
     expect(description).toContain("| raw | row |");
+  });
+
+  it("parses Simplify new grad rows and preserves the category", () => {
+    const markdown = `
+## Software Engineering New Grad Roles
+
+| Company | Role | Location | Application | Age |
+|---|---|---|---|---|
+| <a href="https://acme.com"><strong>Acme</strong></a> | Software Engineer, New Grad | New York, NY | <a href="https://boards.greenhouse.io/acme/jobs/123456?utm_source=simplify"><img src="apply.png" /></a> | 1d |
+`;
+
+    const jobs = parseSimplifyMarkdown(markdown);
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      company: "Acme",
+      title: "Software Engineer, New Grad",
+      location: "New York, NY",
+      category: "Software Engineering",
+      canonicalUrl: "https://boards.greenhouse.io/acme/jobs/123456"
+    });
+    expect(jobs[0].dedupeKey).toMatch(/^[a-f0-9]{64}$/);
+  });
+
+  it("parses Simplify HTML table rows", () => {
+    const markdown = `
+## 💻 Software Engineering New Grad Roles
+
+<table>
+<tbody>
+<tr>
+<td><strong><a href="https://simplify.jobs/c/Amazon?utm_source=GHList&utm_medium=company">🔥 Amazon</a></strong></td>
+<td>Software Engineer 1</td>
+<td>Seattle, WA</br>SF</td>
+<td><div align="center"><a href="https://amazon.jobs/en/jobs/3141336/software-engineer-i?utm_source=Simplify&ref=Simplify"><img src="apply.png" alt="Apply"></a> <a href="https://simplify.jobs/p/abc?utm_source=GHList"><img src="simplify.png" alt="Simplify"></a></div></td>
+<td>0d</td>
+</tr>
+</tbody>
+</table>
+`;
+
+    const jobs = parseSimplifyMarkdown(markdown);
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({
+      company: "Amazon",
+      title: "Software Engineer 1",
+      location: "Seattle, WA SF",
+      category: "Software Engineering",
+      postingUrl: "https://amazon.jobs/en/jobs/3141336/software-engineer-i?utm_source=Simplify&ref=Simplify",
+      canonicalUrl: "https://amazon.jobs/en/jobs/3141336/software-engineer-i"
+    });
+  });
+
+  it("canonicalizes posting URLs by removing tracking noise", () => {
+    expect(canonicalizePostingUrl("https://Boards.Greenhouse.io/acme/jobs/123456/?utm_source=x#apply")).toBe(
+      "https://boards.greenhouse.io/acme/jobs/123456"
+    );
   });
 });
