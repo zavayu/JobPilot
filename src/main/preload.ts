@@ -20,6 +20,7 @@ const api: JobPilotApi = {
   resumes: {
     importResume: () => invoke("resumes:import"),
     list: () => invoke("resumes:list"),
+    preview: (resumeId) => invoke("resumes:preview", resumeId),
     update: (resumeId, input) => invoke("resumes:update", resumeId, input),
     delete: (resumeId) => invoke("resumes:delete", resumeId)
   },
@@ -50,6 +51,14 @@ const api: JobPilotApi = {
   },
   analytics: {
     get: () => invoke("analytics:get")
+  },
+  googleSheets: {
+    getStatus: () => invoke("googleSheets:getStatus"),
+    saveConfig: (input) => invoke("googleSheets:saveConfig", input),
+    connect: () => invoke("googleSheets:connect"),
+    disconnect: () => invoke("googleSheets:disconnect"),
+    createSpreadsheet: () => invoke("googleSheets:createSpreadsheet"),
+    sync: () => invoke("googleSheets:sync")
   }
 };
 

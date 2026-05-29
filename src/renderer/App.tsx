@@ -4,6 +4,7 @@ import {
   Check,
   Database,
   DownloadCloud,
+  Eye,
   ExternalLink,
   FileText,
   FolderOpen,
@@ -14,6 +15,7 @@ import {
   Search,
   Settings,
   Sparkles,
+  Table2,
   Trash2,
   Upload,
   UserRound
@@ -26,12 +28,14 @@ import {
   CreateJobInput,
   DashboardMetrics,
   ExperienceDTO,
+  GoogleSheetsStatusDTO,
   ImportedJobBatchDTO,
   JobImportSourceDTO,
   ImportedJobDTO,
   JobDetailDTO,
   ResumeDTO,
   ResumeDraftDTO,
+  ResumePreviewDTO,
   SettingsDTO,
   UpsertExperienceInput
 } from "../shared/types";
@@ -99,14 +103,17 @@ function compareText(left?: string | null, right?: string | null): number {
 }
 
 function ageToDays(age?: string | null): number {
-  const match = age?.trim().match(/^(\d+)\s*([dhm])?/i);
+  const match = age?.trim().match(/^(\d+)\s*([a-z]+)?/i);
   if (!match) {
     return Number.MAX_SAFE_INTEGER;
   }
   const amount = Number(match[1]);
   const unit = match[2]?.toLowerCase() ?? "d";
-  if (unit === "m") return amount / 1440;
-  if (unit === "h") return amount / 24;
+  if (unit === "m" || unit === "min" || unit === "mins" || unit === "minute" || unit === "minutes") return amount / 1440;
+  if (unit === "h" || unit === "hr" || unit === "hrs" || unit === "hour" || unit === "hours") return amount / 24;
+  if (unit === "w" || unit === "wk" || unit === "wks" || unit === "week" || unit === "weeks") return amount * 7;
+  if (unit === "mo" || unit === "mon" || unit === "month" || unit === "months") return amount * 30;
+  if (unit === "y" || unit === "yr" || unit === "yrs" || unit === "year" || unit === "years") return amount * 365;
   return amount;
 }
 
@@ -236,6 +243,7 @@ export default function App() {
   const [drafts, setDrafts] = useState<ResumeDraftDTO[]>([]);
   const [metrics, setMetrics] = useState<DashboardMetrics | null>(null);
   const [settings, setSettings] = useState<SettingsDTO | null>(null);
+  const [googleSheetsStatus, setGoogleSheetsStatus] = useState<GoogleSheetsStatusDTO | null>(null);
   const [selectedJobId, setSelectedJobId] = useState<string | null>(null);
   const [jobDetail, setJobDetail] = useState<JobDetailDTO | null>(null);
   const [search, setSearch] = useState("");
@@ -251,14 +259,15 @@ export default function App() {
   const [notice, setNotice] = useState<string | null>(null);
 
   async function refreshAll() {
-    const [nextApplications, nextImportedJobs, nextResumes, nextExperiences, nextDrafts, nextMetrics, nextSettings] = await Promise.all([
+    const [nextApplications, nextImportedJobs, nextResumes, nextExperiences, nextDrafts, nextMetrics, nextSettings, nextGoogleSheetsStatus] = await Promise.all([
       window.jobPilot.jobs.list(),
       window.jobPilot.imports.list(importFilter, importSourceFilter),
       window.jobPilot.resumes.list(),
       window.jobPilot.experiences.list(),
       window.jobPilot.drafts.list(),
       window.jobPilot.analytics.get(),
-      window.jobPilot.settings.get()
+      window.jobPilot.settings.get(),
+      window.jobPilot.googleSheets.getStatus()
     ]);
     setApplications(nextApplications);
     setImportedJobs(nextImportedJobs);
@@ -267,6 +276,7 @@ export default function App() {
     setDrafts(nextDrafts);
     setMetrics(nextMetrics);
     setSettings(nextSettings);
+    setGoogleSheetsStatus(nextGoogleSheetsStatus);
     if (!selectedResumeForAi && nextResumes[0]) {
       setSelectedResumeForAi(nextResumes[0].id);
     }
@@ -550,7 +560,22 @@ export default function App() {
           {view === "settings" ? (
             <SettingsView
               settings={settings}
+              googleSheetsStatus={googleSheetsStatus}
               onSave={(input) => runAction("Saving settings", () => window.jobPilot.settings.update(input))}
+              onGoogleSave={(input) => runAction("Saving Google Sheets settings", () => window.jobPilot.googleSheets.saveConfig(input), setGoogleSheetsStatus)}
+              onGoogleConnect={() => runAction("Connecting Google Sheets", () => window.jobPilot.googleSheets.connect(), setGoogleSheetsStatus)}
+              onGoogleDisconnect={() =>
+                runAction("Disconnecting Google Sheets", async () => {
+                  await window.jobPilot.googleSheets.disconnect();
+                  return window.jobPilot.googleSheets.getStatus();
+                }, setGoogleSheetsStatus)
+              }
+              onGoogleCreate={() => runAction("Creating spreadsheet", () => window.jobPilot.googleSheets.createSpreadsheet(), setGoogleSheetsStatus)}
+              onGoogleSync={() =>
+                runAction("Syncing Google Sheets", () => window.jobPilot.googleSheets.sync(), (result) => {
+                  setNotice(`Google Sheets synced: ${result.jobListingsSynced} listings and ${result.applicationsSynced} applications.`);
+                })
+              }
             />
           ) : null}
         </div>
@@ -1213,7 +1238,7 @@ function JobListingsView({
   onIgnore: (importedJobId: string) => void;
 }) {
   const [importSearch, setImportSearch] = useState("");
-  const [importSort, setImportSort] = useState<ImportedJobSortKey>("seen-desc");
+  const [importSort, setImportSort] = useState<ImportedJobSortKey>("age-asc");
   const [isManualJobOpen, setIsManualJobOpen] = useState(false);
   const sources = settings?.jobImportSources ?? [];
 
@@ -1282,8 +1307,8 @@ function JobListingsView({
             ))}
           </Select>
           <Select value={importSort} onChange={(event) => setImportSort(event.target.value as ImportedJobSortKey)}>
-            <option value="seen-desc">Recently seen</option>
             <option value="age-asc">Newest posting age</option>
+            <option value="seen-desc">Recently seen</option>
             <option value="company-asc">Company A-Z</option>
             <option value="position-asc">Position A-Z</option>
             <option value="location-asc">Location A-Z</option>
@@ -1300,26 +1325,6 @@ function JobListingsView({
         <Metric label="New" value={String(counts.new ?? 0)} />
         <Metric label="Saved" value={String(counts.saved ?? 0)} />
         <Metric label="Duplicates/ignored" value={String(counts.ignored ?? 0)} />
-      </div>
-      <div className="mb-4 rounded-md border border-border bg-slate-50 p-3 text-sm text-muted-foreground dark:bg-slate-950">
-        <p className="font-medium text-slate-700 dark:text-slate-100">Sources</p>
-        <div className="mt-2 grid gap-2">
-          {sources.map((source) => (
-            <div key={source.id} className="flex items-center justify-between gap-3 rounded-md border border-border bg-white px-3 py-2 dark:bg-slate-900">
-              <div>
-                <p className="font-medium text-slate-700 dark:text-slate-100">{source.name}</p>
-                <p className="break-all text-xs">{source.url}</p>
-              </div>
-              <Badge className={source.enabled ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600"}>
-                {source.enabled ? "enabled" : "disabled"}
-              </Badge>
-            </div>
-          ))}
-        </div>
-        <p className="mt-1">
-          Auto-sync {settings?.jobAutoSyncEnabled ? `enabled every ${settings.jobAutoSyncIntervalHours}h` : "disabled"}
-          {settings?.lastJobImportAt ? ` · Last sync ${formatDate(settings.lastJobImportAt)}` : ""}
-        </p>
       </div>
       {visibleImportedJobs.length ? (
         <div className="overflow-hidden rounded-md border border-border">
@@ -1399,13 +1404,96 @@ function ResumesView({
   onUpdate: (resumeId: string, input: any) => void;
   onDelete: (resumeId: string) => void;
 }) {
+  const [selectedResumeId, setSelectedResumeId] = useState<string | null>(null);
+  const [preview, setPreview] = useState<ResumePreviewDTO | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewLoading, setPreviewLoading] = useState(false);
+  const selectedResume = resumes.find((resume) => resume.id === selectedResumeId) ?? resumes[0] ?? null;
+
+  useEffect(() => {
+    if (!resumes.length) {
+      setSelectedResumeId(null);
+      setPreview(null);
+      return;
+    }
+    if (!selectedResumeId || !resumes.some((resume) => resume.id === selectedResumeId)) {
+      setSelectedResumeId(resumes[0].id);
+    }
+  }, [resumes, selectedResumeId]);
+
+  useEffect(() => {
+    if (!selectedResume?.id) {
+      return;
+    }
+    let canceled = false;
+    setPreviewLoading(true);
+    setPreviewError(null);
+    window.jobPilot.resumes
+      .preview(selectedResume.id)
+      .then((nextPreview) => {
+        if (!canceled) {
+          setPreview(nextPreview);
+        }
+      })
+      .catch((err) => {
+        if (!canceled) {
+          setPreview(null);
+          setPreviewError(err instanceof Error ? err.message : String(err));
+        }
+      })
+      .finally(() => {
+        if (!canceled) {
+          setPreviewLoading(false);
+        }
+      });
+    return () => {
+      canceled = true;
+    };
+  }, [selectedResume?.id]);
+
   return (
     <Panel title="Resume Bank" action={<Button icon={Upload} onClick={onImport} disabled={Boolean(busy)}>Import PDF/DOCX</Button>}>
       {resumes.length ? (
-        <div className="grid gap-3">
-          {resumes.map((resume) => (
-            <ResumeRow key={resume.id} resume={resume} onUpdate={onUpdate} onDelete={onDelete} />
-          ))}
+        <div className="grid grid-cols-[minmax(0,1fr)_520px] gap-4">
+          <div className="grid content-start gap-3">
+            {resumes.map((resume) => (
+              <ResumeRow
+                key={resume.id}
+                resume={resume}
+                selected={resume.id === selectedResume?.id}
+                onPreview={setSelectedResumeId}
+                onUpdate={onUpdate}
+                onDelete={onDelete}
+              />
+            ))}
+          </div>
+          <div className="min-h-[680px] rounded-md border border-border bg-slate-50 p-3 dark:bg-slate-950">
+            <div className="mb-3 flex items-start justify-between gap-3">
+              <div>
+                <h3 className="font-semibold">{selectedResume?.title ?? "Resume preview"}</h3>
+                <p className="text-xs text-muted-foreground">{selectedResume?.originalFileName ?? "Select a resume"}</p>
+              </div>
+              {selectedResume ? (
+                <Badge className="bg-slate-100 text-slate-700">{selectedResume.fileType.toUpperCase()}</Badge>
+              ) : null}
+            </div>
+            {previewLoading ? (
+              <div className="flex h-[620px] items-center justify-center gap-2 rounded-md border border-dashed border-border bg-white text-sm text-muted-foreground dark:bg-slate-900">
+                <Loader2 className="h-4 w-4 animate-spin" />
+                Loading preview
+              </div>
+            ) : previewError ? (
+              <EmptyState title="Preview unavailable" body={previewError} />
+            ) : preview?.dataUrl ? (
+              <iframe
+                title={`${selectedResume?.title ?? "Resume"} PDF preview`}
+                src={preview.dataUrl}
+                className="h-[620px] w-full rounded-md border border-border bg-white"
+              />
+            ) : (
+              <EmptyState title="PDF preview unavailable" body="PDF files render here. DOCX resumes still show their extracted text in the resume row." />
+            )}
+          </div>
         </div>
       ) : (
         <EmptyState title="No resumes imported" body="Import a PDF or DOCX resume to enable AI matching and resume drafts." />
@@ -1416,10 +1504,14 @@ function ResumesView({
 
 function ResumeRow({
   resume,
+  selected,
+  onPreview,
   onUpdate,
   onDelete
 }: {
   resume: ResumeDTO;
+  selected: boolean;
+  onPreview: (resumeId: string) => void;
   onUpdate: (resumeId: string, input: any) => void;
   onDelete: (resumeId: string) => void;
 }) {
@@ -1427,11 +1519,14 @@ function ResumeRow({
   const [targetRole, setTargetRole] = useState(resume.targetRole ?? "");
   const [tags, setTags] = useState(joinList(resume.tags));
   return (
-    <div className="rounded-md border border-border p-4">
-      <div className="grid grid-cols-[1fr_1fr_1fr_auto_auto] gap-3">
+    <div className={classNames("rounded-md border p-4", selected ? "border-primary bg-accent/40" : "border-border")}>
+      <div className="grid grid-cols-[1fr_1fr_1fr_auto_auto_auto] gap-3">
         <TextInput value={title} onChange={(event) => setTitle(event.target.value)} />
         <TextInput placeholder="Target role" value={targetRole} onChange={(event) => setTargetRole(event.target.value)} />
         <TextInput placeholder="Tags" value={tags} onChange={(event) => setTags(event.target.value)} />
+        <Button icon={Eye} variant="secondary" onClick={() => onPreview(resume.id)}>
+          Preview
+        </Button>
         <Button icon={Save} variant="secondary" onClick={() => onUpdate(resume.id, { title, targetRole, tags: splitList(tags) })}>
           Save
         </Button>
@@ -1588,9 +1683,16 @@ function Metric({ label, value }: { label: string; value: string }) {
 
 function SettingsView({
   settings,
-  onSave
+  googleSheetsStatus,
+  onSave,
+  onGoogleSave,
+  onGoogleConnect,
+  onGoogleDisconnect,
+  onGoogleCreate,
+  onGoogleSync
 }: {
   settings: SettingsDTO | null;
+  googleSheetsStatus: GoogleSheetsStatusDTO | null;
   onSave: (input: {
     openAiApiKey?: string;
     openAiModel?: string;
@@ -1600,6 +1702,11 @@ function SettingsView({
     jobAutoSyncEnabled?: boolean;
     jobAutoSyncIntervalHours?: number;
   }) => void;
+  onGoogleSave: (input: { clientId?: string; clientSecret?: string; spreadsheetId?: string }) => void;
+  onGoogleConnect: () => void;
+  onGoogleDisconnect: () => void;
+  onGoogleCreate: () => void;
+  onGoogleSync: () => void;
 }) {
   const [apiKey, setApiKey] = useState(settings?.openAiApiKey ?? "");
   const [model, setModel] = useState(settings?.openAiModel ?? "gpt-4.1-mini");
@@ -1608,6 +1715,9 @@ function SettingsView({
   const [jobImportSources, setJobImportSources] = useState<JobImportSourceDTO[]>(settings?.jobImportSources ?? []);
   const [jobAutoSyncEnabled, setJobAutoSyncEnabled] = useState(settings?.jobAutoSyncEnabled ?? true);
   const [jobAutoSyncIntervalHours, setJobAutoSyncIntervalHours] = useState(settings?.jobAutoSyncIntervalHours ?? 6);
+  const [googleClientId, setGoogleClientId] = useState("");
+  const [googleClientSecret, setGoogleClientSecret] = useState("");
+  const [googleSpreadsheetId, setGoogleSpreadsheetId] = useState(googleSheetsStatus?.spreadsheetId ?? "");
 
   useEffect(() => {
     setApiKey(settings?.openAiApiKey ?? "");
@@ -1618,6 +1728,10 @@ function SettingsView({
     setJobAutoSyncEnabled(settings?.jobAutoSyncEnabled ?? true);
     setJobAutoSyncIntervalHours(settings?.jobAutoSyncIntervalHours ?? 6);
   }, [settings]);
+
+  useEffect(() => {
+    setGoogleSpreadsheetId(googleSheetsStatus?.spreadsheetId ?? "");
+  }, [googleSheetsStatus?.spreadsheetId]);
 
   return (
     <Panel title="Local Settings">
@@ -1717,6 +1831,86 @@ function SettingsView({
         >
           Save Settings
         </Button>
+
+        <div className="mt-4 grid gap-3 rounded-md border border-border bg-slate-50 p-4 dark:bg-slate-950">
+          <div className="flex items-start justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2 font-semibold">
+                <Table2 className="h-4 w-4" />
+                Google Sheets
+              </div>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Sync imported listings and tracked applications into separate spreadsheet tabs.
+              </p>
+            </div>
+            <Badge className={googleSheetsStatus?.connected ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-slate-600"}>
+              {googleSheetsStatus?.connected ? "connected" : "not connected"}
+            </Badge>
+          </div>
+
+          <div className="grid gap-3">
+            <Field label="OAuth Client ID">
+              <TextInput
+                value={googleClientId}
+                onChange={(event) => setGoogleClientId(event.target.value)}
+                placeholder={googleSheetsStatus?.clientIdSet ? "Configured" : "Google OAuth desktop client ID"}
+              />
+            </Field>
+            <Field label="OAuth Client Secret">
+              <TextInput
+                type="password"
+                value={googleClientSecret}
+                onChange={(event) => setGoogleClientSecret(event.target.value)}
+                placeholder={googleSheetsStatus?.clientSecretSet ? "Configured" : "Google OAuth client secret"}
+              />
+            </Field>
+            <Field label="Spreadsheet ID or URL">
+              <TextInput
+                value={googleSpreadsheetId}
+                onChange={(event) => setGoogleSpreadsheetId(event.target.value)}
+                placeholder="https://docs.google.com/spreadsheets/d/..."
+              />
+            </Field>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            <Button
+              icon={Save}
+              variant="secondary"
+              onClick={() =>
+                onGoogleSave({
+                  ...(googleClientId.trim() ? { clientId: googleClientId } : {}),
+                  ...(googleClientSecret.trim() ? { clientSecret: googleClientSecret } : {}),
+                  spreadsheetId: googleSpreadsheetId
+                })
+              }
+            >
+              Save Google Settings
+            </Button>
+            <Button icon={ExternalLink} variant="secondary" onClick={onGoogleConnect} disabled={!googleSheetsStatus?.clientIdSet || !googleSheetsStatus?.clientSecretSet}>
+              Connect Google
+            </Button>
+            <Button icon={Plus} variant="secondary" onClick={onGoogleCreate} disabled={!googleSheetsStatus?.connected}>
+              Create Spreadsheet
+            </Button>
+            <Button icon={RefreshCw} onClick={onGoogleSync} disabled={!googleSheetsStatus?.connected || !googleSheetsStatus?.spreadsheetId}>
+              Sync Sheets
+            </Button>
+            <Button icon={Trash2} variant="danger" onClick={onGoogleDisconnect} disabled={!googleSheetsStatus?.connected}>
+              Disconnect
+            </Button>
+          </div>
+
+          {googleSheetsStatus?.spreadsheetUrl ? (
+            <a className="break-all text-sm font-medium text-teal-700 dark:text-cyan-300" href={googleSheetsStatus.spreadsheetUrl} target="_blank" rel="noreferrer">
+              {googleSheetsStatus.spreadsheetUrl}
+            </a>
+          ) : null}
+          <div className="text-xs text-muted-foreground">
+            {googleSheetsStatus?.lastSyncAt ? <p>Last sync: {formatDate(googleSheetsStatus.lastSyncAt)}</p> : <p>No Google Sheets sync yet.</p>}
+            {googleSheetsStatus?.lastError ? <p className="mt-1 text-rose-700">Last error: {googleSheetsStatus.lastError}</p> : null}
+          </div>
+        </div>
       </div>
     </Panel>
   );

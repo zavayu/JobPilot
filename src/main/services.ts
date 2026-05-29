@@ -241,6 +241,25 @@ export async function listResumes() {
   return resumes.map(toResumeDTO);
 }
 
+export async function previewResume(resumeId: string) {
+  const prisma = await getPrisma();
+  const resume = await prisma.resume.findUniqueOrThrow({ where: { id: resumeId } });
+  if (resume.fileType !== "pdf") {
+    return {
+      resumeId,
+      fileType: resume.fileType === "docx" ? "docx" : "pdf",
+      dataUrl: null
+    };
+  }
+
+  const buffer = await fs.readFile(resume.filePath);
+  return {
+    resumeId,
+    fileType: "pdf",
+    dataUrl: `data:application/pdf;base64,${buffer.toString("base64")}`
+  };
+}
+
 export async function updateResume(resumeId: string, input: any) {
   const prisma = await getPrisma();
   const updated = await prisma.resume.update({

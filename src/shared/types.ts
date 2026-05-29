@@ -66,6 +66,12 @@ export type ResumeDTO = {
   lastUsedAt?: string | null;
 };
 
+export type ResumePreviewDTO = {
+  resumeId: string;
+  fileType: "pdf" | "docx";
+  dataUrl?: string | null;
+};
+
 export type ApplicationDTO = {
   id: string;
   jobPostingId: string;
@@ -197,6 +203,30 @@ export type JobImportSyncResult = {
   recentJobs: ImportedJobDTO[];
 };
 
+export type GoogleSheetsStatusDTO = {
+  clientIdSet: boolean;
+  clientSecretSet: boolean;
+  connected: boolean;
+  spreadsheetId?: string | null;
+  spreadsheetUrl?: string | null;
+  lastSyncAt?: string | null;
+  lastError?: string | null;
+};
+
+export type GoogleSheetsConfigInput = {
+  clientId?: string;
+  clientSecret?: string;
+  spreadsheetId?: string;
+};
+
+export type GoogleSheetsSyncResultDTO = {
+  spreadsheetId: string;
+  spreadsheetUrl: string;
+  jobListingsSynced: number;
+  applicationsSynced: number;
+  syncedAt: string;
+};
+
 export type DashboardMetrics = {
   totalJobs: number;
   totalApplications: number;
@@ -258,6 +288,7 @@ export type JobPilotApi = {
   resumes: {
     importResume: () => Promise<ResumeDTO | null>;
     list: () => Promise<ResumeDTO[]>;
+    preview: (resumeId: string) => Promise<ResumePreviewDTO>;
     update: (resumeId: string, input: Partial<Pick<ResumeDTO, "title" | "targetRole" | "tags" | "notes">>) => Promise<ResumeDTO>;
     delete: (resumeId: string) => Promise<void>;
   };
@@ -302,5 +333,13 @@ export type JobPilotApi = {
   };
   analytics: {
     get: () => Promise<DashboardMetrics>;
+  };
+  googleSheets: {
+    getStatus: () => Promise<GoogleSheetsStatusDTO>;
+    saveConfig: (input: GoogleSheetsConfigInput) => Promise<GoogleSheetsStatusDTO>;
+    connect: () => Promise<GoogleSheetsStatusDTO>;
+    disconnect: () => Promise<void>;
+    createSpreadsheet: () => Promise<GoogleSheetsStatusDTO>;
+    sync: () => Promise<GoogleSheetsSyncResultDTO>;
   };
 };

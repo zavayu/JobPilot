@@ -1,5 +1,13 @@
 import { ipcMain } from "electron";
 import { generateResumeDraft, matchJob, parseJob } from "./ai";
+import {
+  connectGoogleSheets,
+  createGoogleSpreadsheet,
+  disconnectGoogleSheets,
+  getGoogleSheetsStatus,
+  saveGoogleSheetsConfig,
+  syncGoogleSheets
+} from "./googleSheets";
 import { ignoreImportedJob, listImportedJobs, saveImportedJob, syncImportedJobs } from "./jobImport";
 import {
   createExperience,
@@ -17,6 +25,7 @@ import {
   listDrafts,
   listExperiences,
   listResumes,
+  previewResume,
   updateApplication,
   updateExperience,
   updateProfile,
@@ -41,6 +50,7 @@ export function registerIpcHandlers(): void {
 
   handle("resumes:import", importResume);
   handle("resumes:list", listResumes);
+  handle("resumes:preview", previewResume);
   handle("resumes:update", updateResume);
   handle("resumes:delete", deleteResume);
 
@@ -65,4 +75,11 @@ export function registerIpcHandlers(): void {
   handle("settings:update", updateSettings);
 
   handle("analytics:get", getAnalytics);
+
+  handle("googleSheets:getStatus", getGoogleSheetsStatus);
+  handle("googleSheets:saveConfig", saveGoogleSheetsConfig);
+  handle("googleSheets:connect", connectGoogleSheets);
+  handle("googleSheets:disconnect", disconnectGoogleSheets);
+  handle("googleSheets:createSpreadsheet", createGoogleSpreadsheet);
+  handle("googleSheets:sync", syncGoogleSheets);
 }
